@@ -1418,6 +1418,16 @@ class EasyMultiTrackProject(io.ComfyNode):
             generation_mode = h3_generation_mode(task_type)
             task = entry.get("task", {})
             content = task.get("content", {}) if isinstance(task, dict) else {}
+            configured_segment_seed = content.get("seed") if isinstance(content, dict) else None
+            has_custom_segment_seed = False
+            if configured_segment_seed is not None and str(configured_segment_seed).strip() not in ("", "-1"):
+                try:
+                    task_seed = int(configured_segment_seed)
+                    has_custom_segment_seed = True
+                except (ValueError, TypeError):
+                    task_seed = first_pass_seed
+            else:
+                task_seed = first_pass_seed
             task_is_passthrough = is_passthrough or h3_task_is_passthrough(entry)
             locked_audio_track = h3_locked_audio_track(entry, info)
             locked_video_track = h3_locked_video_track(entry, info)
@@ -1526,7 +1536,7 @@ class EasyMultiTrackProject(io.ComfyNode):
                     "video_path": saved_video_end.out(0),
                     "tracks_info": output_info,
                     "continuity_mode": "shot",
-                    "seed": first_pass_seed,
+                    "seed": task_seed,
                     "sampling_pass": "single",
                 }
                 if previous_artifact is not None:
@@ -1699,7 +1709,11 @@ class EasyMultiTrackProject(io.ComfyNode):
                         context_latent=first_pass_context_latent,
                         sigmas=first_pass_sigmas,
                         context_length=str(context_source_frames),
-                        seed=(first_pass_seed + task_index) & 0xFFFFFFFFFFFFFFFF,
+                        seed=(
+                            task_seed
+                            if has_custom_segment_seed
+                            else (first_pass_seed + task_index)
+                        ) & 0xFFFFFFFFFFFFFFFF,
                         continue_audio=True,
                         freeze_audio=False,
                     )
@@ -1742,7 +1756,7 @@ class EasyMultiTrackProject(io.ComfyNode):
                     "vae": vae,
                     "latent_image": initial_latent,
                     "sigmas": first_pass_sigmas,
-                    "seed": first_pass_seed,
+                    "seed": task_seed,
                     "transition_ratio": transition_ratio,
                     "lowres_scale": lowres_scale,
                     "rho": 0.1 if has_context_continuity else 0.0,
@@ -1795,7 +1809,7 @@ class EasyMultiTrackProject(io.ComfyNode):
                     first_pass_noise = graph.node(
                         "RandomNoise",
                         id=f"first_pass_noise_{task_index}",
-                        noise_seed=first_pass_seed,
+                        noise_seed=task_seed,
                     )
                     report_segment_step(0.38)
                     sampling_inputs: dict[str, Any] = {
@@ -1933,7 +1947,7 @@ class EasyMultiTrackProject(io.ComfyNode):
                 second_pass_noise = graph.node(
                     "DisableNoise" if disable_2nd_noise else "RandomNoise",
                     id=f"second_pass_noise_{task_index}",
-                    **({} if disable_2nd_noise else {"noise_seed": second_pass_seed}),
+                    **({} if disable_2nd_noise else {"noise_seed": task_seed}),
                 )
                 report_segment_step(0.66)
                 second_pass_guider = graph.node(
@@ -2253,7 +2267,7 @@ class EasyMultiTrackProject(io.ComfyNode):
                 **saved_media_inputs,
                 "tracks_info": output_info,
                 "continuity_mode": continuity_mode,
-                "seed": first_pass_seed,
+                "seed": task_seed,
                 "sampling_pass": completed_sampling_pass,
             }
             if has_second_pass or is_selflift:

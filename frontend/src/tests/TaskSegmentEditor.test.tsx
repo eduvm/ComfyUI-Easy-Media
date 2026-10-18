@@ -1629,4 +1629,39 @@ describe('TaskSegmentEditor', () => {
     expect(screen.getByTestId('media-selector-mock').getAttribute('data-slot-items'))
       .toBe('__slot__:image')
   })
+
+  it('updates segment seed and randomizes when requested', () => {
+    const onContentChange = vi.fn()
+    const base = taskSegment()
+    const segment = {
+      ...base,
+      content: {
+        ...base.content,
+        seed: 12345,
+      },
+    }
+
+    render(
+      <TaskSegmentEditor
+        segment={segment}
+        onContentChange={onContentChange}
+      />,
+    )
+
+    const seedInput = screen.getByRole('textbox', { name: 'Seed' }) as HTMLInputElement
+    expect(seedInput.value).toBe('12345')
+
+    fireEvent.change(seedInput, { target: { value: '998877' } })
+    expect(onContentChange).toHaveBeenLastCalledWith({ seed: 998877 })
+
+    const clearButton = screen.getByRole('button', { name: 'Use global seed' })
+    fireEvent.click(clearButton)
+    expect(onContentChange).toHaveBeenLastCalledWith({ seed: undefined })
+
+    const randomizeButton = screen.getByRole('button', { name: 'Randomize seed' })
+    fireEvent.click(randomizeButton)
+    expect(onContentChange).toHaveBeenCalledWith(expect.objectContaining({
+      seed: expect.any(Number),
+    }))
+  })
 })

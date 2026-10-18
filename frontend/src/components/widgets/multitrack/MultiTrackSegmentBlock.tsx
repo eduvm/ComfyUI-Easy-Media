@@ -471,6 +471,14 @@ export function MultiTrackSegmentBlock({
                   <span className="truncate rounded-sm px-1 font-medium">
                     {label}
                   </span>
+                  {trackType === 'task' && segment.content.seed != null && (
+                    <span
+                      className="shrink-0 rounded-sm px-1 text-[8px] opacity-80 font-mono"
+                      title={`Seed: ${segment.content.seed}`}
+                    >
+                      🎲 {segment.content.seed}
+                    </span>
+                  )}
                   <span className="shrink-0 rounded-sm px-1 tabular-nums">
                     {durationLabel}
                   </span>

@@ -1,5 +1,5 @@
 import { useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react'
-import { CloudUpload, Eye, Pencil, Plus, RotateCcw, Share2, Trash2 } from 'lucide-react'
+import { CloudUpload, Dices, Eye, Pencil, Plus, RotateCcw, Share2, Trash2, X } from 'lucide-react'
 import { Button } from '@/components/ui/button'
 import {
   Dialog,
@@ -252,6 +252,11 @@ export function TaskSegmentEditor({
   const duration = frameToSeconds(segmentDuration(segment), frameRate)
   const formattedDuration = formatMultiTrackDurationTimecode(duration, frameRate)
   const [durationInput, setDurationInput] = useState(formattedDuration)
+  const [seedInput, setSeedInput] = useState<string>(segment.content.seed != null ? String(segment.content.seed) : '')
+
+  useEffect(() => {
+    setSeedInput(segment.content.seed != null ? String(segment.content.seed) : '')
+  }, [segment.content.seed, segment.id])
   const images = taskImages(segment)
   const slotItems = useMemo(
     () => computeSlotItems(node, app, 'image'),
@@ -571,6 +576,27 @@ export function TaskSegmentEditor({
         ? { ...patch, continuity_mode: MULTITRACK_DEFAULT_CONTINUITY_MODE }
         : patch,
     })))
+  }
+
+  function handleSeedChange(value: string) {
+    const trimmed = value.trim()
+    setSeedInput(trimmed)
+    if (trimmed === '') {
+      handleDropdownContentChange({ seed: undefined })
+    } else if (/^\d+$/.test(trimmed)) {
+      handleDropdownContentChange({ seed: Number(trimmed) })
+    }
+  }
+
+  function handleRandomizeSeed() {
+    const randomSeed = Math.floor(Math.random() * 1125899906842624)
+    setSeedInput(String(randomSeed))
+    handleDropdownContentChange({ seed: randomSeed })
+  }
+
+  function handleClearSeed() {
+    setSeedInput('')
+    handleDropdownContentChange({ seed: undefined })
   }
 
   function handleDeleteImage(imageId: string) {
@@ -1234,6 +1260,61 @@ export function TaskSegmentEditor({
         </div>
 
         <div className="flex items-center gap-2">
+          {editMode === 'individual' && mode !== 'passthrough' && (
+            <div className="flex items-center gap-1">
+              <TooltipProvider delayDuration={300}>
+                <Tooltip>
+                  <TooltipTrigger asChild>
+                    <div className="relative flex items-center">
+                      <Input
+                        type="text"
+                        inputMode="numeric"
+                        className="h-8 w-24 bg-card text-[10px] pl-2 pr-6 tabular-nums"
+                        placeholder={t('multitrack.seedPlaceholder')}
+                        value={seedInput}
+                        onChange={(event) => handleSeedChange(event.currentTarget.value)}
+                        aria-label={t('multitrack.seed')}
+                      />
+                      {seedInput ? (
+                        <Button
+                          type="button"
+                          variant="ghost"
+                          size="icon"
+                          className="absolute right-0.5 h-6 w-6 text-muted-foreground hover:text-foreground cursor-pointer"
+                          aria-label={t('multitrack.clearSeed')}
+                          onClick={handleClearSeed}
+                        >
+                          <X className="h-3 w-3" />
+                        </Button>
+                      ) : null}
+                    </div>
+                  </TooltipTrigger>
+                  <TooltipContent side="bottom" className="max-w-72">
+                    {t('multitrack.seedTooltip')}
+                  </TooltipContent>
+                </Tooltip>
+              </TooltipProvider>
+              <TooltipProvider delayDuration={300}>
+                <Tooltip>
+                  <TooltipTrigger asChild>
+                    <Button
+                      type="button"
+                      variant="ghost"
+                      size="icon"
+                      className="h-8 w-8 cursor-pointer text-muted-foreground hover:text-foreground"
+                      aria-label={t('multitrack.randomizeSeed')}
+                      onClick={handleRandomizeSeed}
+                    >
+                      <Dices className="h-3.5 w-3.5" />
+                    </Button>
+                  </TooltipTrigger>
+                  <TooltipContent side="bottom">
+                    {t('multitrack.randomizeSeed')}
+                  </TooltipContent>
+                </Tooltip>
+              </TooltipProvider>
+            </div>
+          )}
           {format === 'MiniMax' && mode !== 'passthrough' && (taskIndex > 0 || hasSelectedContinuityTargets) && (
             <Select
               value={continuityMode}

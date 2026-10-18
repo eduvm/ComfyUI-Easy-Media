@@ -51,6 +51,7 @@ export interface MultiTrackSegmentContent {
   task_mode?: MultiTrackTaskMode
   continuity_mode?: MultiTrackContinuityMode
   ref_image_size?: MultiTrackRefImageSize
+  seed?: number
   images?: MultiTrackTaskImage[]
   duration?: number
   volume_db?: number
