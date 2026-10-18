@@ -124,6 +124,17 @@ function downstreamNodeIds(node: ProjectNode): Set<string> {
       pending.push(targetId)
     }
   }
+  const upstreamPending = [...result].filter((id) => id !== rootId)
+  while (upstreamPending.length > 0) {
+    const targetId = upstreamPending.shift()!
+    for (const link of links) {
+      if (String(link.target_id ?? '') !== targetId || link.origin_id == null) continue
+      const originId = String(link.origin_id)
+      if (originId === rootId || result.has(originId)) continue
+      result.add(originId)
+      upstreamPending.push(originId)
+    }
+  }
   return result
 }
 
