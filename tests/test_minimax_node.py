@@ -3570,8 +3570,8 @@ def test_multitrack_h3_first_pass_preview_only_builds_first_selected_task(monkey
     )
 
     nodes = list(result.expand.values())
-    assert sum(node["class_type"] == "easy multiTrackTaskOutput" for node in nodes) == 1
-    assert sum(node["class_type"] == "SamplerCustomAdvanced" for node in nodes) == 1
+    assert sum(node["class_type"] == "easy multiTrackTaskOutput" for node in nodes) == 2
+    assert sum(node["class_type"] == "SamplerCustomAdvanced" for node in nodes) == 2
     assert not any(node["class_type"] == "ImageResizeKJv2" for node in nodes)
     conditioning = next(
         node for node in nodes if node["class_type"] == "easy minimaxH3ToVideo"
@@ -3580,17 +3580,19 @@ def test_multitrack_h3_first_pass_preview_only_builds_first_selected_task(monkey
         1344,
         768,
     )
-    artifact = next(
+    artifacts = [
         node for node in nodes if node["class_type"] == "easy h3ProjectArtifact"
-    )
-    assert artifact["inputs"]["sampling_pass"] == "first"
-    first_pass_sample_id = next(
+    ]
+    assert len(artifacts) == 2
+    assert [a["inputs"]["sampling_pass"] for a in artifacts] == ["first", "first"]
+    sampler_ids = [
         node_id
         for node_id, node in result.expand.items()
         if node["class_type"] == "SamplerCustomAdvanced"
-    )
-    assert artifact["inputs"]["context_latent"] == [first_pass_sample_id, 1]
-    assert artifact["inputs"]["context_latent_low"] == [first_pass_sample_id, 1]
+    ]
+    assert artifacts[0]["inputs"]["context_latent"] == [sampler_ids[0], 1]
+    assert artifacts[0]["inputs"]["context_latent_low"] == [sampler_ids[0], 1]
+    assert artifacts[1]["inputs"]["context_latent"] == [sampler_ids[1], 1]
 
 
 def test_multitrack_h3_dual_resumes_saved_first_pass_checkpoint(

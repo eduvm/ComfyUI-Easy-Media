@@ -985,9 +985,9 @@ class EasyMultiTrackProject(io.ComfyNode):
                     "1st_pass_only",
                     default=False,
                     tooltip=(
-                        "Run and save only the first selected segment's "
+                        "Run and save only the selected segments' "
                         "first pass. Turn this off on the next run to "
-                        "resume directly from that checkpoint at pass two."
+                        "resume directly from those checkpoints at pass two."
                     ),
                 ),
                 io.Boolean.Input("disable_2nd_noise", default=False, tooltip="Disable noise in second-pass for dual-sampling"),
@@ -1261,34 +1261,34 @@ class EasyMultiTrackProject(io.ComfyNode):
                     f"{previous_index + 1} has no active low-resolution context "
                     "latent. Regenerate the previous segment with SelfLift first."
                 )
-        resume_task_index: int | None = None
+        resume_task_indices: set[int] = set()
         if run_second_pass and selected_entries:
-            first_selected_index = selected_entries[0][0]
-            if has_h3_first_pass_checkpoint(
-                safe_project_name,
-                first_selected_index,
-                folder_paths.get_output_directory(),
-            ):
-                resume_task_index = first_selected_index
+            for task_index, _ in selected_entries:
+                if has_h3_first_pass_checkpoint(
+                    safe_project_name,
+                    task_index,
+                    folder_paths.get_output_directory(),
+                ):
+                    resume_task_indices.add(task_index)
+            if resume_task_indices:
+                resumed_list = ", ".join(str(idx) for idx in sorted(resume_task_indices))
                 log_node_info(
                     node_name,
-                    f"Resuming segment {first_selected_index} from its first-pass checkpoint",
+                    f"Resuming segment(s) {resumed_list} from their first-pass checkpoint",
                 )
 
         if project_save == "override" and segment_count == -1:
             clear_h3_project_segments_from(
                 safe_project_name,
                 (
-                    resume_task_index + 1
-                    if resume_task_index is not None
+                    max(resume_task_indices) + 1
+                    if resume_task_indices
                     else segment_start_index
                 ),
                 folder_paths.get_output_directory(),
             )
             report_step(19)
 
-        if first_pass_only and has_second_pass:
-            selected_entries = selected_entries[:1]
         log_node_info(
             node_name,
             f"Found {len(all_entries)} segments; processing {len(selected_entries)}",
@@ -1367,7 +1367,7 @@ class EasyMultiTrackProject(io.ComfyNode):
              full_locked_audio) = prepare_multitrack_project_media(info)
             first_pass_sampler = first_pass_sigmas = None
             if has_sampling_tasks and any(
-                task_index != resume_task_index and not h3_task_is_passthrough(entry)
+                task_index not in resume_task_indices and not h3_task_is_passthrough(entry)
                 for task_index, entry in selected_entries
             ):
                 if is_selflift:
@@ -1796,7 +1796,7 @@ class EasyMultiTrackProject(io.ComfyNode):
                     model=first_pass_sampling_model,
                     conditioning=positive,
                 )
-                if task_index == resume_task_index:
+                if task_index in resume_task_indices:
                     report_segment_step(0.38)
                     first_pass_latent = graph.node(
                         "easy h3ProjectContextLatentLoad",
@@ -1957,17 +1957,22 @@ class EasyMultiTrackProject(io.ComfyNode):
                     conditioning=second_pass_positive,
                 )
                 report_segment_step(0.71)
+                second_sampling_inputs: dict[str, Any] = {
+                    "noise": second_pass_noise.out(0),
+                    "guider": second_pass_guider.out(0),
+                    "sampler": second_pass_sampler,
+                    "sigmas": segment_second_pass_sigmas,
+                    "latent_image": upscaled_latent,
+                    "project_name": safe_project_name,
+                    "segment_index": task_index,
+                    "sampling_pass": "second",
+                }
+                if task_index in resume_task_indices and previous_artifact is not None:
+                    second_sampling_inputs["previous"] = previous_artifact
                 second_sampling_start = graph.node(
                     "easy h3SegmentSamplingStart",
                     id=f"second_sampling_start_{task_index}",
-                    noise=second_pass_noise.out(0),
-                    guider=second_pass_guider.out(0),
-                    sampler=second_pass_sampler,
-                    sigmas=segment_second_pass_sigmas,
-                    latent_image=upscaled_latent,
-                    project_name=safe_project_name,
-                    segment_index=task_index,
-                    sampling_pass="second",
+                    **second_sampling_inputs,
                 )
                 second_preview_inputs = (
                     {
@@ -2253,7 +2258,9 @@ class EasyMultiTrackProject(io.ComfyNode):
             # A pass-two resume needs the full sampled span, while continuity
             # uses the re-encoded delivered span (also saved as low context).
             checkpoint_latent = (
-                first_pass_latent if preserve_source_timing else saved_hires_context_latent
+                first_pass_latent
+                if preserve_source_timing or context_trim_frames is not None
+                else saved_hires_context_latent
             )
             artifact_inputs: dict[str, Any] = {
                 "project_name": safe_project_name,
