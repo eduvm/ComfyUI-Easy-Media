@@ -95,16 +95,24 @@ from ..utils.video import extract_video_audio
 # ---------------------------------------------------------------------------
 class AspectRatio(str, Enum):
     SQUARE = "1:1 (Square)"
-    PHOTO_V = "2:3 (Portrait Photo)"
-    PHOTO_H = "3:2 (Photo)"
-    STANDARD_V = "3:4 (Portrait Standard)"
-    STANDARD_H = "4:3 (Standard)"
-    WIDESCREEN_V = "9:16 (Portrait Widescreen)"
-    WIDESCREEN_H = "16:9 (Widescreen)"
-    ULTRAWIDE_H = "21:9 (Ultrawide)"
+    PHOTO_V = "2:3 (Vertical Photo)"
+    PHOTO_H = "3:2 (Horizontal Photo)"
+    STANDARD_V = "3:4 (Vertical Standard)"
+    STANDARD_H = "4:3 (Horizontal Standard)"
+    WIDESCREEN_V = "9:16 (Vertical Widescreen)"
+    WIDESCREEN_H = "16:9 (Horizontal Widescreen)"
+    ULTRAWIDE_H = "21:9 (Horizontal Ultrawide)"
+    # Legacy aliases
+    LEGACY_PHOTO_V = "2:3 (Portrait Photo)"
+    LEGACY_PHOTO_H = "3:2 (Photo)"
+    LEGACY_STANDARD_V = "3:4 (Portrait Standard)"
+    LEGACY_STANDARD_H = "4:3 (Standard)"
+    LEGACY_WIDESCREEN_V = "9:16 (Portrait Widescreen)"
+    LEGACY_WIDESCREEN_H = "16:9 (Widescreen)"
+    LEGACY_ULTRAWIDE_H = "21:9 (Ultrawide)"
 
 
-ASPECT_RATIOS: dict[AspectRatio, tuple[int, int]] = {
+ASPECT_RATIOS: dict[AspectRatio | str, tuple[int, int]] = {
     AspectRatio.SQUARE: (1, 1),
     AspectRatio.PHOTO_V: (2, 3),
     AspectRatio.PHOTO_H: (3, 2),
@@ -113,6 +121,14 @@ ASPECT_RATIOS: dict[AspectRatio, tuple[int, int]] = {
     AspectRatio.WIDESCREEN_V: (9, 16),
     AspectRatio.WIDESCREEN_H: (16, 9),
     AspectRatio.ULTRAWIDE_H: (21, 9),
+    # Legacy aliases for backward compatibility with workflows saved with old names
+    AspectRatio.LEGACY_PHOTO_V: (2, 3),
+    AspectRatio.LEGACY_PHOTO_H: (3, 2),
+    AspectRatio.LEGACY_STANDARD_V: (3, 4),
+    AspectRatio.LEGACY_STANDARD_H: (4, 3),
+    AspectRatio.LEGACY_WIDESCREEN_V: (9, 16),
+    AspectRatio.LEGACY_WIDESCREEN_H: (16, 9),
+    AspectRatio.LEGACY_ULTRAWIDE_H: (21, 9),
 }
 
 BASE_RESOLUTIONS = [
@@ -121,6 +137,33 @@ BASE_RESOLUTIONS = [
     ["width", "height", "longest"],
     ["width", "height", "custom"],
     ["width", "height", "megapixels"],
+    # Vertical (9:16 / Portrait)
+    [320, 576, "Vertical 9:16"],    # Draft ~0.18 MP (MiniMax compatible: 320/32=10, 576/32=18)
+    [480, 832, "Vertical 9:16"],
+    [544, 960, "Vertical 9:16"],
+    [576, 1024, "Vertical 9:16"],
+    [720, 1280, "Vertical 9:16"],
+    [768, 1024, "Vertical 3:4"],
+    [768, 1344, "Vertical 9:16"],
+    [816, 1456, "Vertical 9:16"],
+    [817, 1920, "Vertical 1:2.35"],
+    [864, 1536, "Vertical 9:16"],
+    [1080, 1920, "Vertical 9:16"],
+    # Horizontal (16:9 / Landscape)
+    [1920, 1080, "Horizontal 16:9"],
+    [1920, 817, "Horizontal 2.35:1"],
+    [1536, 864, "Horizontal 16:9"],
+    [1456, 816, "Horizontal 16:9"],
+    [1344, 768, "Horizontal 16:9"],
+    [1280, 720, "Horizontal 16:9"],
+    [1024, 768, "Horizontal 4:3"],
+    [1024, 576, "Horizontal 16:9"],
+    [960, 544, "Horizontal 16:9"],
+    [832, 480, "Horizontal 16:9"],
+    [576, 320, "Horizontal 16:9"],   # Draft ~0.18 MP (MiniMax compatible: 576/32=18, 320/32=10)
+]
+
+LEGACY_BASE_RESOLUTIONS = [
     [480, 832, "9:16"],
     [544, 960, "9:16"],
     [576, 1024, "9:16"],
@@ -154,6 +197,10 @@ VIDEO_FORMATS = {
 }
 
 resolution_strings = [f"{w} x {h} ({r})" for w, h, r in BASE_RESOLUTIONS]
+legacy_resolution_strings = [f"{w} x {h} ({r})" for w, h, r in LEGACY_BASE_RESOLUTIONS]
+all_resolution_strings = resolution_strings + [
+    s for s in legacy_resolution_strings if s not in resolution_strings
+]
 resize_method_input = io.Combo.Input(
     "resize_method",
     default="stretch",
@@ -196,7 +243,7 @@ resolution_combo_options = [
             )
         ),
     )
-    for s in resolution_strings
+    for s in all_resolution_strings
 ]
 
 # ---------------------------------------------------------------------------
@@ -488,10 +535,14 @@ def _resolve_megapixel_dimensions(
     megapixels: object,
     multiple: int,
 ) -> tuple[int, int]:
-    ratio = ASPECT_RATIOS.get(
-        str(aspect_ratio or AspectRatio.SQUARE.value),
-        ASPECT_RATIOS[AspectRatio.SQUARE],
-    )
+    key = str(aspect_ratio or AspectRatio.SQUARE.value)
+    ratio = ASPECT_RATIOS.get(key)
+    if ratio is None:
+        m = re.search(r"(\d+)\s*:\s*(\d+)", key)
+        if m:
+            ratio = (int(m.group(1)), int(m.group(2)))
+        else:
+            ratio = ASPECT_RATIOS[AspectRatio.SQUARE]
     megapixel_value = float(megapixels) if megapixels else 1.0
     total_pixels = megapixel_value * 1024 * 1024
     scale = math.sqrt(total_pixels / (ratio[0] * ratio[1]))
@@ -1457,11 +1508,15 @@ class TimelineEditor(io.ComfyNode):
             target_w, target_h = _resolve_megapixel_dimensions(aspect_ratio, megapixels, div)
         elif mode == "preset":
             target_w, target_h = 544, 960
-            for entry in BASE_RESOLUTIONS:
-                w, h = entry[0], entry[1]
-                if isinstance(w, int) and f"{w} x {h}" in _resolution:
-                    target_w, target_h = int(w), int(h)
-                    break
+            preset = re.search(r"(\d+)\s*x\s*(\d+)", _resolution)
+            if preset:
+                target_w, target_h = int(preset.group(1)), int(preset.group(2))
+            else:
+                for entry in BASE_RESOLUTIONS:
+                    w, h = entry[0], entry[1]
+                    if isinstance(w, int) and f"{w} x {h}" in _resolution:
+                        target_w, target_h = int(w), int(h)
+                        break
         elif mode == "auto":
             if dimension_image_tensor is not None:
                 target_h = dimension_image_tensor.shape[1]
