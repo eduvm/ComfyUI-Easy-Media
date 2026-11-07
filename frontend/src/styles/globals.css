@@ -143,8 +143,9 @@
     }
   }
 
-  /* Dark theme - active when body has dark-theme class */
-  .dark-theme .__CUSTOM_NODE_CLASS__{
+  /* Dark theme - frontend < 1.58 sets the dark-theme class; newer versions set
+   * an inline color-scheme on <html> from the active palette instead. */
+  :is(.dark-theme, :root[style*="color-scheme: dark"]) .__CUSTOM_NODE_CLASS__{
     --checker-a: oklch(0.145 0 0);
     --checker-b: oklch(0.205 0 0);
     --background: oklch(0.145 0 0);
