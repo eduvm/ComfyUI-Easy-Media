@@ -415,6 +415,41 @@ describe('ProjectVideoCombineWidget', () => {
     expect(Object.keys(api.queuePrompt.mock.calls[0][1].output)).toEqual(['8', '10'])
   })
 
+  it('follows virtual SetNode/GetNode connections resolved in the API prompt', async () => {
+    const { props, api, graphToPrompt } = widgetProps()
+    const nodeWithVirtualOutput = {
+      id: 8,
+      graph: {
+        links: new Map([
+          [7, { origin_id: 3, target_id: 8 }],
+          [9, { origin_id: 8, target_id: 20 }],
+          [12, { origin_id: 21, target_id: 22 }],
+          [13, { origin_id: 22, target_id: 10 }],
+          [14, { origin_id: 23, target_id: 22 }],
+        ]),
+      },
+    }
+    graphToPrompt.mockResolvedValue({
+      workflow: { nodes: [] },
+      output: {
+        '3': { inputs: { project_name: 'demo' }, class_type: 'easy multitrackProject' },
+        '8': {
+          inputs: { project_name: ['3', 0], project_data: JSON.stringify(projectData) },
+          class_type: 'easy multitrackProjectVideoCombine',
+        },
+        '22': { inputs: { images: ['8', 0], model: ['23', 0] }, class_type: 'RelayVSRUpscale' },
+        '23': { inputs: {}, class_type: 'ModelLoader' },
+        '10': { inputs: { video: ['22', 0] }, class_type: 'easy saveVideo' },
+      },
+    })
+
+    render(<ProjectVideoCombineWidget {...props} node={nodeWithVirtualOutput} />)
+    fireEvent.click(screen.getByRole('button', { name: 'Combine' }))
+
+    await waitFor(() => expect(api.queuePrompt).toHaveBeenCalledTimes(1))
+    expect(Object.keys(api.queuePrompt.mock.calls[0][1].output).sort()).toEqual(['10', '22', '23', '8'])
+  })
+
   it('removes stale external input links omitted from the API prompt after reload', async () => {
     const { props, api, graphToPrompt } = widgetProps()
     const reloadedNode = {

@@ -22,15 +22,9 @@ const MIN_CLIP_FRAMES = 1
 const PLAYBACK_UI_UPDATE_INTERVAL_MS = 100
 const ICON_BUTTON_CLASS = 'h-6 w-6 shrink-0 [&_svg]:size-3.5'
 
-interface GraphLink {
-  origin_id?: number | string
-  target_id?: number | string
-}
-
 interface ProjectNode {
   id?: number | string
   graph?: {
-    links?: Record<string, GraphLink> | GraphLink[] | Map<unknown, GraphLink>
     _nodes?: Array<{ id?: number | string }>
   }
 }
@@ -49,14 +43,6 @@ function ensureProjectData(value: unknown): ProjectData {
     auto_combine: data.auto_combine !== false,
     updated_at: data.updated_at,
   }
-}
-
-function graphLinks(node: ProjectNode): GraphLink[] {
-  const links = node.graph?.links
-  if (!links) return []
-  if (Array.isArray(links)) return links.filter(Boolean)
-  if (links instanceof Map) return [...links.values()].filter(Boolean)
-  return Object.values(links).filter(Boolean)
 }
 
 function promptGraphNodeIds(
@@ -109,28 +95,41 @@ function pruneExternalPromptConnections(
   return value
 }
 
-function downstreamNodeIds(node: ProjectNode): Set<string> {
+function promptInputRefs(value: unknown, refs: Set<string>): Set<string> {
+  if (
+    Array.isArray(value)
+    && value.length === 2
+    && (typeof value[0] === 'string' || typeof value[0] === 'number')
+    && typeof value[1] === 'number'
+  ) {
+    refs.add(String(value[0]))
+  } else if (Array.isArray(value)) {
+    for (const item of value) promptInputRefs(item, refs)
+  } else if (value && typeof value === 'object') {
+    for (const item of Object.values(value)) promptInputRefs(item, refs)
+  }
+  return refs
+}
+
+// Walks the API prompt instead of canvas links so virtual nodes (SetNode/GetNode, Reroute) are already resolved.
+function downstreamNodeIds(node: ProjectNode, output: Record<string, { inputs?: Record<string, unknown> }>): Set<string> {
   const rootId = String(node.id ?? '')
   const result = new Set<string>(rootId ? [rootId] : [])
-  const pending = rootId ? [rootId] : []
-  const links = graphLinks(node)
-  while (pending.length > 0) {
-    const originId = pending.shift()!
-    for (const link of links) {
-      if (String(link.origin_id ?? '') !== originId || link.target_id == null) continue
-      const targetId = String(link.target_id)
-      if (result.has(targetId)) continue
-      result.add(targetId)
-      pending.push(targetId)
+  const refs = new Map(Object.entries(output).map(([nodeId, apiNode]) => [nodeId, promptInputRefs(apiNode.inputs ?? {}, new Set())]))
+  let grew = true
+  while (grew) {
+    grew = false
+    for (const [nodeId, nodeRefs] of refs) {
+      if (result.has(nodeId) || ![...nodeRefs].some((ref) => result.has(ref))) continue
+      result.add(nodeId)
+      grew = true
     }
   }
   const upstreamPending = [...result].filter((id) => id !== rootId)
   while (upstreamPending.length > 0) {
     const targetId = upstreamPending.shift()!
-    for (const link of links) {
-      if (String(link.target_id ?? '') !== targetId || link.origin_id == null) continue
-      const originId = String(link.origin_id)
-      if (originId === rootId || result.has(originId)) continue
+    for (const originId of refs.get(targetId) ?? []) {
+      if (originId === rootId || result.has(originId) || !refs.has(originId)) continue
       result.add(originId)
       upstreamPending.push(originId)
     }
@@ -759,8 +758,8 @@ export function ProjectVideoCombineWidget({ value, onChange, app, node }: Readon
       }
       setIsCombining(true)
       const prompt = await app.graphToPrompt()
-      const keepIds = downstreamNodeIds(node as ProjectNode)
       const allOutput = prompt.output as Record<string, { inputs?: Record<string, unknown> }>
+      const keepIds = downstreamNodeIds(node as ProjectNode, allOutput)
       const graphNodeIds = promptGraphNodeIds(node as ProjectNode, prompt.workflow, allOutput)
       const filteredOutput = Object.fromEntries(
         Object.entries(allOutput).filter(([nodeId]) => keepIds.has(nodeId)).map(([nodeId, apiNode]) => {
