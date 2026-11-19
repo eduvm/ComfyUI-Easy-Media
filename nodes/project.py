@@ -848,6 +848,9 @@ class EasyH3ProjectStaticPrepare(io.ComfyNode):
                         graph, preset_name=str(sampling_plan), is_turbo=second_is_turbo,
                         has_custom_second_pass_sampling=custom_second,
                     )
+                    if context_sigmas is None:
+                        context_sigmas = second_sigmas
+
             return io.NodeOutput(
                 static_data, None, model, second_model, clip, vae, audio_vae,
                 preview_vae, locked, first_sampler, first_sigmas, second_sampler,
@@ -1392,6 +1395,9 @@ class EasyMultiTrackProject(io.ComfyNode):
                     context_second_pass_sigmas = _h3_resolve_context_second_pass_sigmas(
                         graph, preset_name=preset_name, is_turbo=second_is_turbo,
                         has_custom_second_pass_sampling=custom_second)
+                    if context_second_pass_sigmas is None:
+                        context_second_pass_sigmas = second_pass_sigmas
+
         report_step(31)
 
         report_step(33)
