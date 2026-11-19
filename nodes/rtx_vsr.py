@@ -233,17 +233,27 @@ def _fps_expression(fps: float) -> str:
     return f"{fraction.numerator}/{fraction.denominator}"
 
 
-def _decoded_frames(decoder: Any):
+def _decoded_frames(decoder: Any, total_frames: int = 0):
+    yielded = 0
     while True:
-        batch = decoder.get_batch_frames(DECODE_BATCH_SIZE)
+        if total_frames > 0:
+            remaining = total_frames - yielded
+            if remaining <= 0:
+                break
+            batch_size = min(DECODE_BATCH_SIZE, remaining)
+        else:
+            batch_size = DECODE_BATCH_SIZE
+        batch = decoder.get_batch_frames(batch_size)
         if not batch:
             break
-        # ThreadedDecoder keeps frames valid until the next batch call.
+        yielded += len(batch)
         yield from batch
 
 
 def _decoded_rgb_tensor(frame: Any, torch_mod: Any):
     """Zero-copy decoded RGBP frame -> CUDA float CHW tensor in [0, 1]."""
+    if isinstance(frame, torch_mod.Tensor):
+        return frame
     tensor = torch_mod.from_dlpack(frame)
     if tensor.ndim != 3:
         raise RuntimeError(f"Unexpected NVDEC frame shape: {tuple(tensor.shape)}")
@@ -254,6 +264,55 @@ def _decoded_rgb_tensor(frame: Any, torch_mod: Any):
     else:
         raise RuntimeError(f"Unexpected NVDEC RGB frame shape: {tuple(tensor.shape)}")
     return planar.to(dtype=torch_mod.float32).div_(255.0).contiguous()
+
+
+class _PyAvDecoder:
+    """Safe video frame decoder using PyAV, avoiding native driver NVDEC segfaults."""
+
+    def __init__(self, enc_file_path: str, gpu: int = 0):
+        import av
+        self.enc_file_path = enc_file_path
+        self.gpu = gpu
+        self.container = av.open(enc_file_path)
+        self.stream = self.container.streams.video[0]
+        self.width = int(self.stream.width or 0)
+        self.height = int(self.stream.height or 0)
+        self.fps = float(self.stream.average_rate or self.stream.base_rate or 24.0)
+        self.total_frames = int(self.stream.frames or 0)
+        self._frame_generator = self.container.decode(video=0)
+
+    def __len__(self) -> int:
+        return self.total_frames
+
+    def get_stream_metadata(self):
+        import types
+        return types.SimpleNamespace(
+            width=self.width,
+            height=self.height,
+            fps=self.fps,
+            num_frames=self.total_frames,
+        )
+
+    def get_batch_frames(self, batch_size: int = 4):
+        import torch
+        device = f"cuda:{self.gpu}"
+        frames = []
+        for _ in range(batch_size):
+            try:
+                packet = next(self._frame_generator)
+                arr = packet.to_ndarray(format="rgb24")
+                tensor = torch.from_numpy(arr).permute(2, 0, 1).to(device=device, dtype=torch.float32).div_(255.0).contiguous()
+                frames.append(tensor)
+            except StopIteration:
+                break
+        return frames
+
+    def __iter__(self):
+        while True:
+            batch = self.get_batch_frames(DECODE_BATCH_SIZE)
+            if not batch:
+                break
+            yield from batch
 
 
 class _Nv12GpuSurface:
@@ -492,15 +551,34 @@ def _run_streaming_vsr(
     if color_type is None or not hasattr(color_type, "RGBP"):
         raise RuntimeError("Installed PyNvVideoCodec does not expose OutputColorType.RGBP.")
 
-    # PyNvVideoCodec 2.2 recommends background prefetch for continuous
-    # inference pipelines; keep the batch fully consumed before fetching again.
-    decoder = nvc.ThreadedDecoder(
-        enc_file_path=source_path,
-        buffer_size=DECODE_BUFFER_SIZE,
-        gpu_id=gpu,
-        use_device_memory=True,
-        output_color_type=color_type.RGBP,
-    )
+    # Use PyAvDecoder primarily to avoid segmentation faults from background C++ worker threads / NVDEC
+    # driver crashes in asyncio/multi-threaded ComfyUI environments.
+    decoder = None
+    try:
+        decoder = _PyAvDecoder(enc_file_path=source_path, gpu=gpu)
+        logger.info("[RTX VSR Video] Using resilient PyAV decoder (%dx%d, %d frames)", decoder.width, decoder.height, decoder.total_frames)
+    except Exception as exc:
+        logger.warning("[RTX VSR Video] PyAV decoder initialization failed (%s); trying PyNvVideoCodec", exc)
+
+    if decoder is None and hasattr(nvc, "SimpleDecoder"):
+        try:
+            decoder = nvc.SimpleDecoder(
+                enc_file_path=source_path,
+                gpu_id=gpu,
+                use_device_memory=True,
+                output_color_type=color_type.RGBP,
+            )
+        except Exception as exc:
+            logger.warning("[RTX VSR Video] SimpleDecoder initialization failed (%s); trying ThreadedDecoder", exc)
+
+    if decoder is None:
+        decoder = nvc.ThreadedDecoder(
+            enc_file_path=source_path,
+            buffer_size=DECODE_BUFFER_SIZE,
+            gpu_id=gpu,
+            use_device_memory=True,
+            output_color_type=color_type.RGBP,
+        )
     input_width, input_height, fps, total_frames = _decoder_info(decoder)
     probed_fps, probed_fps_expr = _probe_fps_spec(source_path)
     if probed_fps > 0:
@@ -511,7 +589,7 @@ def _run_streaming_vsr(
     # rebuilding timestamps around the encoded elementary stream.
     mux_fps_expr = probed_fps_expr or _fps_expression(fps)
 
-    frame_iter = _decoded_frames(decoder)
+    frame_iter = _decoded_frames(decoder, total_frames)
     pending_frame = None
     if input_width <= 0 or input_height <= 0:
         try:
